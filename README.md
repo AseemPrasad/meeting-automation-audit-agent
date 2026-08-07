@@ -75,6 +75,25 @@ Optional router tuning:
 - `LLM_CIRCUIT_ERROR_THRESHOLD`, `LLM_CIRCUIT_WINDOW_SECONDS`,
   `LLM_CIRCUIT_COOLDOWN_SECONDS`
 
+### Deterministic Structured Output (Pydantic Schemas)
+
+LLM extraction is enforced against typed Pydantic response models instead of
+relying on regex over unstructured text:
+
+- `worker/schemas/transcript.py` - the response contract
+  (`MeetingAnalysisResponse`, `ActionItem`, `KeyDecision`, `SentimentAnalysis`).
+- `worker/services/llm/base.py::generate_structured` - the shared default
+  implementation: generates text, then validates it against the schema. A
+  `StructuredOutputError` surfaces when validation fails (loud failures, no
+  silent regex extraction).
+- Native structured-output overrides where available: Groq (JSON mode) and
+  OpenAI (strict JSON-schema `response_format`).
+- The router exposes `generate_structured` with the same circuit-breaker /
+  failover semantics as free-text generation.
+- The workflow uses `generate_structured` and projects the result back to the
+  legacy `{summary, tasks, decisions}` payload shape, keeping a regex fallback
+  for resilience.
+
 ### Tests
 
 ```
