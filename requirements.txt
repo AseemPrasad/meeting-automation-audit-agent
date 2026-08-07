@@ -13,5 +13,5 @@ instructor
 pytest
 redisvl
 sentence-transformers
-
-
+qdrant-client
+rank-bm25
