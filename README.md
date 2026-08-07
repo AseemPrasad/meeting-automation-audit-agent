@@ -24,3 +24,59 @@ meta llama 3.1 for task extraction
 AI agents can be made in less time with the rise of n8n
 But I have used Python and FastAPI because it offers customization,flexibility,performance and scalability.
 It gives a better edge over other technologies as it can handle complex ai logic and custom integrations.
+
+---
+
+## Distributed Async Workflow (Celery + Redis)
+
+This project ships an optional distributed async layer that runs the long
+LLM pipeline in the background so the web app never blocks on transcription
+and extraction. It lives entirely under the `worker/` package and does not
+touch the original synchronous `/process` route.
+
+### Architecture
+
+- `worker/core/celery_app.py` - Celery application bound to a Redis broker/backend.
+- `worker/core/database.py` - SQLAlchemy engine/session (SQLite by default).
+- `worker/models/job.py` - `jobs` table tracking job lifecycle (PENDING,
+  PROCESSING, COMPLETED, FAILED) and the completed extraction payload.
+- `worker/workflows/transcript_workflow.py` - the Celery task: transcribe ->
+  extract -> persist result. Configured with exponential backoff + jitter retries.
+- `worker/api/v1/endpoints/jobs.py` - new API:
+  - `POST /api/v1/transcripts/process` - validate, persist as PENDING, enqueue,
+    return `202 Accepted` with a `job_id`.
+  - `GET /api/v1/jobs/{job_id}` - poll job status and fetch results on completion.
+- `worker/services/llm/*` - a resilient LLM gateway with multi-provider
+  failover (Groq, OpenAl, Anthropic, Google Gemini) guarded by a thread-safe
+  circuit breaker. Falls back to Groq (the original pipeline) when only the
+  Groq key is present, so behavior is preserved.
+
+### Running
+
+1. Start Redis, then a worker:
+   `celery -A worker.core.celery_app.celery_app worker --queues=transcripts`
+2. Run the web app normally:
+   `uvicorn app:app`
+3. Submit jobs via the new async API and poll their status with the job ID.
+
+### Environment variables
+
+Redis (defaults are shown):
+- `REDIS_URL` (e.g. `redis://localhost:6379/0`)
+
+LLM provider keys (the router fails over in this order where configured):
+- `GROQ_API_KEY`
+- `OPENAI_API_KEY`
+- `ANTHROPIC_API_KEY`
+- `GEMINI_API_KEY`
+
+Optional router tuning:
+- `LLM_PRIMARY` and `LLM_FALLBACKS` (comma-separated) to choose provider order
+- `LLM_CIRCUIT_ERROR_THRESHOLD`, `LLM_CIRCUIT_WINDOW_SECONDS`,
+  `LLM_CIRCUIT_COOLDOWN_SECONDS`
+
+### Tests
+
+```
+python -m pytest tests/ -v
+```
