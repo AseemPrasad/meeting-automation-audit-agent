@@ -18,6 +18,11 @@ app = FastAPI()
 # Serve static files
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
+# Register async worker API (additive; original routes remain untouched)
+from worker.api.v1.endpoints.jobs import router as jobs_router
+
+app.include_router(jobs_router)
+
 # Groq client
 client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 

@@ -7,3 +7,7 @@ venv/
 # Python cache files
 _pycache_/
 *.pyc
+
+# Local runtime artifacts (jobs DB + uploaded temp files)
+jobs.db
+temp/
