@@ -11,5 +11,7 @@ anthropic
 openai
 instructor
 pytest
+redisvl
+sentence-transformers
 
 

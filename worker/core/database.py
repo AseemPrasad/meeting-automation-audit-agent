@@ -28,6 +28,7 @@ Base = declarative_base()
 def init_db() -> None:
     """Create all tables (idempotent). Safe to call from web and worker."""
     from worker.models.job import Job  # noqa: F401  (register model with Base)
+    from worker.models.cache import CacheEntry  # noqa: F401  (register model)
 
     Base.metadata.create_all(bind=engine)
 
