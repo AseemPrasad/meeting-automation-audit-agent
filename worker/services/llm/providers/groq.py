@@ -6,12 +6,18 @@ the existing behavior when no other provider keys are configured.
 """
 
 import os
+from typing import Type, TypeVar
+
+from pydantic import BaseModel
 
 from worker.services.llm.base import (
     LLMProvider,
     ProviderRateLimitError,
     ProviderUnavailableError,
+    StructuredOutputError,
 )
+
+T = TypeVar("T", bound=BaseModel)
 
 
 class GroqProvider(LLMProvider):
@@ -42,6 +48,42 @@ class GroqProvider(LLMProvider):
                 temperature=temperature,
             )
             return completion.choices[0].message.content or ""
+        except Exception as exc:  # noqa: BLE001 - translate SDK errors
+            status = getattr(exc, "status_code", None)
+            message = str(exc).lower()
+            if status == 429 or "rate" in message or "429" in message:
+                raise ProviderRateLimitError(f"Groq rate limited: {exc}") from exc
+            raise ProviderUnavailableError(f"Groq error: {exc}") from exc
+
+    def generate_structured(
+        self, prompt: str, response_model: Type[T], temperature: float = 0.2
+    ) -> T:
+        """Native structured output via Groq's JSON-schema response_format.
+
+        Falls back to the base text-based validation when the model does not
+        support JSON mode (e.g. older or non-LLM models).
+        """
+        if not self._api_key:
+            raise ProviderUnavailableError("GROQ_API_KEY is not configured")
+        schema = response_model.model_json_schema()
+        try:
+            client = self._ensure_client()
+            completion = client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=temperature,
+                response_format={"type": "json_object", "schema": schema},
+            )
+            raw = completion.choices[0].message.content or ""
+            try:
+                return response_model.model_validate_json(raw)
+            except Exception as exc:  # noqa: BLE001 - fall back to base
+                raise StructuredOutputError(
+                    f"Groq structured validation failed: {exc}"
+                ) from exc
+        except StructuredOutputError:
+            # JSON mode may not be supported on this model -> use base path.
+            return super().generate_structured(prompt, response_model, temperature)
         except Exception as exc:  # noqa: BLE001 - translate SDK errors
             status = getattr(exc, "status_code", None)
             message = str(exc).lower()

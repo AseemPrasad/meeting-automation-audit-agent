@@ -5,7 +5,9 @@ automatically fails over to configured fallbacks on hard failures or
 persistent rate limits (429s). Providers whose circuit is OPEN are skipped.
 """
 
-from typing import List, Tuple
+from typing import List, Tuple, Type, TypeVar
+
+from pydantic import BaseModel
 
 from worker.services.llm.base import (
     LLMProvider,
@@ -15,6 +17,8 @@ from worker.services.llm.base import (
 )
 from worker.services.llm.circuit_breaker import CircuitBreaker
 from worker.services.llm.config import LLMConfig
+
+T = TypeVar("T", bound=BaseModel)
 
 
 class LLMRouter:
@@ -87,6 +91,52 @@ class LLMRouter:
 
         raise ProviderUnavailableError(
             "All LLM providers failed. Details: " + " | ".join(errors)
+        )
+
+    def generate_structured(
+        self,
+        prompt: str,
+        response_model: Type[T],
+        temperature: float = 0.2,
+    ) -> T:
+        """Run the prompt through the provider chain and validate output.
+
+        Uses each provider's native structured-output support when available,
+        otherwise falls back to text generation + schema validation. Applies
+        the same circuit-breaker failover semantics as ``generate()``.
+        """
+        if not self._chain:
+            raise ProviderUnavailableError(
+                "No LLM providers are configured (set at least one API key)"
+            )
+
+        errors = []
+        for provider, breaker in self._chain:
+            if not breaker.allow_request():
+                errors.append(f"{provider.name}: circuit OPEN (skipped)")
+                continue
+
+            try:
+                result = provider.generate_structured(
+                    prompt, response_model, temperature=temperature
+                )
+                breaker.record_success()
+                return result
+            except ProviderRateLimitError as exc:
+                breaker.record_failure()
+                errors.append(f"{provider.name}: rate limited -> {exc}")
+            except ProviderUnavailableError as exc:
+                breaker.record_failure()
+                errors.append(f"{provider.name}: unavailable -> {exc}")
+            except LLMProviderError as exc:
+                breaker.record_failure()
+                errors.append(f"{provider.name}: error -> {exc}")
+            except Exception as exc:  # noqa: BLE001 - unexpected errors
+                breaker.record_failure()
+                errors.append(f"{provider.name}: unexpected -> {exc}")
+
+        raise ProviderUnavailableError(
+            "All LLM providers failed (structured). Details: " + " | ".join(errors)
         )
 
     @classmethod
