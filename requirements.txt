@@ -9,6 +9,7 @@ python-multipart
 google-generativeai
 anthropic
 openai
+instructor
 pytest
 
 
