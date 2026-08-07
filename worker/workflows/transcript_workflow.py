@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from worker.core.celery_app import celery_app
 from worker.core.database import SessionLocal
 from worker.models.job import Job
+from worker.schemas.transcript import MeetingAnalysisResponse
 from worker.services.llm.router import LLMRouter
 
 load_dotenv()
@@ -52,33 +53,45 @@ def _transcribe(client: Groq, file_path: str) -> str:
 def _extract_tasks_decisions(client: Groq, text: str) -> dict:
     """Extract structured tasks/decisions via the multi-provider LLM gateway.
 
-    Falls back automatically across configured providers (circuit-breaker
-    aware). When only GROQ_API_KEY is present, this is functionally identical
-    to the original direct Groq call (same model, same prompt, same JSON parse).
+    Uses ``generate_structured`` with the ``MeetingAnalysisResponse`` schema so
+    the model output is validated deterministically. The returned dict is
+    projected back to the original ``{summary, tasks, decisions}`` contract to
+    avoid changing the downstream payload shape. A regex fallback is retained
+    for resilience if schema validation exhausts retries.
     """
     prompt = f"""
-You are an AI meeting assistant. Extract tasks and decisions from the transcript below.
-Respond ONLY with valid JSON in this exact format:
-
-{{
-    "summary": "...",
-    "tasks": ["...", "..."],
-    "decisions": ["...", "..."]
-}}
+You are an AI meeting assistant. Analyze the meeting transcript below and produce
+a structured analysis. Extract:
+- a short "summary" of the meeting
+- "action_items": tasks/actions each with assignee, task, optional deadline and priority
+- "key_decisions": decisions made, each with decision, optional impact and context
+- "sentiment": optional sentiment analysis (overall_score in [-1,1] and per-speaker scores)
 
 Transcript:
 {text}
 """
-    ai_output = llm_router.generate(prompt, temperature=0.2)
-
-    parsed = {"summary": "", "tasks": [], "decisions": []}
+    default = {"summary": "", "tasks": [], "decisions": []}
     try:
-        match = re.search(r"\{.*\}", ai_output, re.DOTALL)
-        if match:
-            parsed = json.loads(match.group(0))
-    except json.JSONDecodeError:
-        pass
-    return parsed
+        result = llm_router.generate_structured(
+            prompt, response_model=MeetingAnalysisResponse, temperature=0.2
+        )
+        return {
+            "summary": result.summary,
+            "tasks": [item.task for item in result.action_items],
+            "decisions": [d.decision for d in result.key_decisions],
+        }
+    except Exception:
+        # Fall back to the legacy regex/text parse so a schema issue never
+        # silently drops previously-working behavior.
+        ai_output = llm_router.generate(prompt, temperature=0.2)
+        parsed = {"summary": "", "tasks": [], "decisions": []}
+        try:
+            match = re.search(r"\{.*\}", ai_output, re.DOTALL)
+            if match:
+                parsed = json.loads(match.group(0))
+        except json.JSONDecodeError:
+            pass
+        return parsed or default
 
 
 @celery_app.task(
