@@ -14,9 +14,15 @@ from sqlalchemy.orm import Session
 from worker.core.celery_app import celery_app
 from worker.core.database import SessionLocal
 from worker.models.job import Job
+from worker.services.llm.router import LLMRouter
 
 load_dotenv()
 
+# LLM gateway with multi-provider failover. Degrades to Groq (the existing
+# pipeline) when no other provider keys are configured, preserving behavior.
+llm_router = LLMRouter.from_env()
+
+# Groq client still used for transcription (Whisper).
 client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
 # Transient failures that justify a retry
@@ -44,7 +50,12 @@ def _transcribe(client: Groq, file_path: str) -> str:
 
 
 def _extract_tasks_decisions(client: Groq, text: str) -> dict:
-    """Extract structured tasks/decisions using Llama 3.1."""
+    """Extract structured tasks/decisions via the multi-provider LLM gateway.
+
+    Falls back automatically across configured providers (circuit-breaker
+    aware). When only GROQ_API_KEY is present, this is functionally identical
+    to the original direct Groq call (same model, same prompt, same JSON parse).
+    """
     prompt = f"""
 You are an AI meeting assistant. Extract tasks and decisions from the transcript below.
 Respond ONLY with valid JSON in this exact format:
@@ -58,12 +69,7 @@ Respond ONLY with valid JSON in this exact format:
 Transcript:
 {text}
 """
-    completion = client.chat.completions.create(
-        model="llama-3.1-8b-instant",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.2,
-    )
-    ai_output = completion.choices[0].message.content
+    ai_output = llm_router.generate(prompt, temperature=0.2)
 
     parsed = {"summary": "", "tasks": [], "decisions": []}
     try:

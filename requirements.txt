@@ -6,4 +6,9 @@ celery
 redis
 sqlalchemy
 python-multipart
+google-generativeai
+anthropic
+openai
+pytest
+
 
