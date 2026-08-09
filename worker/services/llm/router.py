@@ -3,6 +3,11 @@
 Routes each generation request through the primary provider first, then
 automatically fails over to configured fallbacks on hard failures or
 persistent rate limits (429s). Providers whose circuit is OPEN are skipped.
+
+In addition to failover, the router records best-effort usage/cost metadata
+for the most recent successful call (``last_usage``) for observability. This
+is purely additive and never changes the return type or blocking behavior of
+the public ``generate*`` methods.
 """
 
 from typing import List, Tuple, Type, TypeVar
@@ -17,6 +22,8 @@ from worker.services.llm.base import (
 )
 from worker.services.llm.circuit_breaker import CircuitBreaker
 from worker.services.llm.config import LLMConfig
+from worker.services.llm.pricing import estimate_cost_usd
+from worker.services.llm.usage import estimate_tokens
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -29,6 +36,14 @@ class LLMRouter:
         # Ordered list of (provider, circuit_breaker) pairs: primary first.
         self._chain: List[Tuple[LLMProvider, CircuitBreaker]] = []
         self._build_chain()
+        # Last completed call's usage/cost (best-effort observability).
+        self.last_usage = {
+            "provider": None,
+            "model": None,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "cost_usd": 0.0,
+        }
 
     def _build_chain(self) -> None:
         """Assemble the provider chain from config, skipping unconfigured ones."""
@@ -55,6 +70,28 @@ class LLMRouter:
         """Current circuit breaker state per provider (for observability)."""
         return {p.name: c.state for p, c in self._chain}
 
+    def _record_usage(self, provider: LLMProvider, prompt: str, result) -> None:
+        """Best-effort record of estimated usage/cost for the last call.
+
+        Providers return plain text (discarding raw token counts), so token
+        counts are estimated heuristically. Never raises.
+        """
+        try:
+            prompt_tokens = estimate_tokens(prompt)
+            completion_tokens = estimate_tokens(result)
+            model = getattr(provider, "model", None) or provider.name
+            self.last_usage = {
+                "provider": provider.name,
+                "model": model,
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "cost_usd": estimate_cost_usd(
+                    provider.name, model, prompt_tokens, completion_tokens
+                ),
+            }
+        except Exception:  # noqa: BLE001 - observability must never break calls
+            pass
+
     def generate(self, prompt: str, temperature: float = 0.2) -> str:
         """Run the prompt through the provider chain with failover."""
         if not self._chain:
@@ -73,6 +110,7 @@ class LLMRouter:
             try:
                 result = provider.generate(prompt, temperature=temperature)
                 breaker.record_success()
+                self._record_usage(provider, prompt, result)
                 return result
             except ProviderRateLimitError as exc:
                 breaker.record_failure()
@@ -121,6 +159,7 @@ class LLMRouter:
                     prompt, response_model, temperature=temperature
                 )
                 breaker.record_success()
+                self._record_usage(provider, prompt, result)
                 return result
             except ProviderRateLimitError as exc:
                 breaker.record_failure()
@@ -143,4 +182,3 @@ class LLMRouter:
     def from_env(cls) -> "LLMRouter":
         """Build a router from environment configuration."""
         return cls(LLMConfig.from_env())
-
