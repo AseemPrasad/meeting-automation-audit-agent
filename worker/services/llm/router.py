@@ -131,6 +131,54 @@ class LLMRouter:
             "All LLM providers failed. Details: " + " | ".join(errors)
         )
 
+    def stream(self, prompt: str, temperature: float = 0.2, **kwargs):
+        """Stream output from the provider chain with failover.
+
+        Mirrors :meth:`generate` semantics (circuit-breaker checks, failover,
+        error translation) but yields text chunks incrementally as they are
+        produced by the provider's ``stream`` method. The first provider in the
+        chain that is not circuit-open and does not raise is used; a usage
+        record is populated once at the end of the successful stream.
+        """
+        if not self._chain:
+            raise ProviderUnavailableError(
+                "No LLM providers are configured (set at least one API key)"
+            )
+
+        errors = []
+        for provider, breaker in self._chain:
+            if not breaker.allow_request():
+                errors.append(f"{provider.name}: circuit OPEN (skipped)")
+                continue
+
+            try:
+                chunks = provider.stream(prompt, temperature=temperature, **kwargs)
+                full = ""
+                for chunk in chunks:
+                    text = getattr(chunk, "text", chunk)
+                    if text:
+                        full += text
+                        yield text
+                breaker.record_success()
+                self._record_usage(provider, prompt, full)
+                return
+            except ProviderRateLimitError as exc:
+                breaker.record_failure()
+                errors.append(f"{provider.name}: rate limited -> {exc}")
+            except ProviderUnavailableError as exc:
+                breaker.record_failure()
+                errors.append(f"{provider.name}: unavailable -> {exc}")
+            except LLMProviderError as exc:
+                breaker.record_failure()
+                errors.append(f"{provider.name}: error -> {exc}")
+            except Exception as exc:  # noqa: BLE001 - unexpected errors
+                breaker.record_failure()
+                errors.append(f"{provider.name}: unexpected -> {exc}")
+
+        raise ProviderUnavailableError(
+            "All LLM providers failed (stream). Details: " + " | ".join(errors)
+        )
+
     def generate_structured(
         self,
         prompt: str,
