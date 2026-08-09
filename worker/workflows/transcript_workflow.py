@@ -17,6 +17,10 @@ from worker.models.job import Job
 from worker.schemas.transcript import MeetingAnalysisResponse
 from worker.services.llm.router import LLMRouter
 
+# Optional evaluation hook. Imported lazily via the package so that a failure
+# in the evaluation layer can never break the transcript pipeline.
+from worker.eval.pipeline import evaluate as _eval_pipeline
+
 load_dotenv()
 
 # LLM gateway with multi-provider failover. Degrades to Groq (the existing
@@ -28,6 +32,18 @@ client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
 # Transient failures that justify a retry
 RETRYABLE_EXCEPTIONS = (Exception,)
+
+
+def _run_evaluation(transcript: str, analysis: dict) -> dict:
+    """Run the optional evaluation hook and return its report.
+
+    Fully guarded: any failure in the evaluation layer is swallowed so the
+    transcript pipeline is never affected. Returns an empty dict on error.
+    """
+    try:
+        return _eval_pipeline(transcript, analysis)
+    except Exception:
+        return {}
 
 
 def _update_job_status(db: Session, job_id: str, status: str, **kwargs) -> None:
@@ -113,7 +129,12 @@ def process_transcript(self, job_id: str, file_path: str) -> dict:
         text = _transcribe(client, file_path)
         analysis = _extract_tasks_decisions(client, text)
 
+        # Optional evaluation hook (never breaks the pipeline on failure).
+        evaluation = _run_evaluation(text, analysis)
+
         payload = {"transcript": text, "analysis": analysis}
+        if evaluation:
+            payload["evaluation"] = evaluation
         _update_job_status(
             db, job_id, "COMPLETED", result_payload=json.dumps(payload)
         )
