@@ -15,3 +15,8 @@ redisvl
 sentence-transformers
 qdrant-client
 rank-bm25
+# OpenTelemetry + Prometheus observability
+opentelemetry-api
+opentelemetry-sdk
+opentelemetry-instrumentation-fastapi
+prometheus-client
