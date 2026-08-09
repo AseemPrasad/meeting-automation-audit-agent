@@ -43,6 +43,16 @@ class LLMProvider(ABC):
     def generate(self, prompt: str, temperature: float = 0.2) -> str:
         """Run a single generation call and return the raw text output."""
 
+    def stream(self, prompt: str, temperature: float = 0.2, **kwargs):
+        """Stream text output as incremental chunks.
+
+        Default implementation yields the entire result as a single chunk by
+        delegating to :meth:`generate`. Providers that support token-by-token
+        streaming should override this method. This is a concrete (non-abstract)
+        method so existing providers keep working unchanged.
+        """
+        yield self.generate(prompt, temperature=temperature)
+
     def generate_structured(
         self, prompt: str, response_model: Type[T], temperature: float = 0.2
     ) -> T:
@@ -63,4 +73,3 @@ class LLMProvider(ABC):
             raise StructuredOutputError(
                 f"{self.name}: output failed schema validation: {exc}"
             ) from exc
-

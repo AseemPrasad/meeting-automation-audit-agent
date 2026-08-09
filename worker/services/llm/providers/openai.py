@@ -50,6 +50,30 @@ class OpenAIProvider(LLMProvider):
                 raise ProviderRateLimitError(f"OpenAI rate limited: {exc}") from exc
             raise ProviderUnavailableError(f"OpenAI error: {exc}") from exc
 
+    def stream(self, prompt: str, temperature: float = 0.2, **kwargs):
+        """Stream output token-by-token via the OpenAI SDK (stream=True)."""
+        if not self._api_key:
+            raise ProviderUnavailableError("OPENAI_API_KEY is not configured")
+        try:
+            client = self._ensure_client()
+            stream = client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=temperature,
+                stream=True,
+            )
+            for chunk in stream:
+                delta = chunk.choices[0].delta
+                text = getattr(delta, "content", None) or ""
+                if text:
+                    yield text
+        except Exception as exc:  # noqa: BLE001 - translate SDK errors
+            status = getattr(exc, "status_code", None)
+            message = str(exc).lower()
+            if status == 429 or "rate" in message or "429" in message:
+                raise ProviderRateLimitError(f"OpenAI rate limited: {exc}") from exc
+            raise ProviderUnavailableError(f"OpenAI error: {exc}") from exc
+
     def generate_structured(
         self, prompt: str, response_model: Type[T], temperature: float = 0.2
     ) -> T:
@@ -87,4 +111,3 @@ class OpenAIProvider(LLMProvider):
             if status == 429 or "rate" in message or "429" in message:
                 raise ProviderRateLimitError(f"OpenAI rate limited: {exc}") from exc
             raise ProviderUnavailableError(f"OpenAI error: {exc}") from exc
-
