@@ -30,6 +30,9 @@ def __getattr__(name):
     if name == "record_evaluation":
         from worker.eval.dataset_exporter import record_evaluation
         return record_evaluation
+    if name == "should_flag":
+        from worker.eval.dataset_exporter import should_flag
+        return should_flag
     if name == "evaluate":
         # Importing the pipeline also pulls in the judge + exporter.
         from worker.eval.pipeline import evaluate
