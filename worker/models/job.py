@@ -11,6 +11,7 @@ class Job(Base):
     __tablename__ = "jobs"
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    tenant_id = Column(String(128), nullable=False, default="default", index=True)
     # PENDING -> PROCESSING -> COMPLETED | FAILED
     status = Column(String(20), nullable=False, default="PENDING", index=True)
     input_payload = Column(Text, nullable=True)
@@ -28,4 +29,3 @@ class Job(Base):
 
     def __repr__(self) -> str:  # pragma: no cover - debug helper
         return f"<Job id={self.id} status={self.status}>"
-
