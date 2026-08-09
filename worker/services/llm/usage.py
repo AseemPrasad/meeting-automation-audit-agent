@@ -5,6 +5,10 @@ extracts ``(prompt_tokens, completion_tokens)`` from any provider response by
 duck-typing the common accessor patterns. It never raises: if the response
 carries no usage information it returns ``(0, 0)`` so that cost accounting is
 best-effort and never breaks the caller.
+
+It also provides a simple heuristic token estimator (``estimate_tokens``) for
+paths where the provider discards raw usage information (e.g. the router only
+receives the generated text string).
 """
 
 from __future__ import annotations
@@ -35,6 +39,14 @@ def _getattr_path(obj: Any, *attrs: str) -> Any:
         if ok:
             return current
     return None
+
+
+def _to_int(value) -> int:
+    """Coerce a value to int, returning 0 on failure."""
+    try:
+        return int(value) if value is not None else 0
+    except (TypeError, ValueError):
+        return 0
 
 
 def extract_usage(response: Any) -> Tuple[int, int]:
@@ -74,15 +86,18 @@ def extract_usage(response: Any) -> Tuple[int, int]:
             usage.get("output_tokens", usage.get("candidatesTokenCount")),
         )
 
-    try:
-        prompt_tokens = int(prompt_tokens) if prompt_tokens is not None else 0
-    except (TypeError, ValueError):
-        prompt_tokens = 0
-    try:
-        completion_tokens = (
-            int(completion_tokens) if completion_tokens is not None else 0
-        )
-    except (TypeError, ValueError):
-        completion_tokens = 0
+    return _to_int(prompt_tokens), _to_int(completion_tokens)
 
-    return prompt_tokens, completion_tokens
+
+def estimate_tokens(text) -> int:
+    """Heuristic token estimate (~4 chars per token) for cost accounting.
+
+    Used when a provider discards raw usage info (the router only receives the
+    generated text). Approximation only; never raises.
+    """
+    if text is None:
+        return 0
+    try:
+        return max(int(len(str(text)) / 4), 0)
+    except Exception:  # noqa: BLE001 - never break on estimation
+        return 0
