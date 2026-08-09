@@ -2,15 +2,19 @@
 
 POST /api/v1/transcripts/process  -> 202 Accepted with job_id
 GET  /api/v1/jobs/{job_id}        -> status + result (polling)
+
+Both routes require a valid Bearer token (tenant-scoped). Jobs are created and
+queried within the caller's tenant so tenants can never see each other's data.
 """
 import json
 import os
 import uuid
 
-from fastapi import APIRouter, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from fastapi.responses import JSONResponse
 
 from worker.core.database import SessionLocal, init_db
+from worker.core.security import get_current_user, Principal
 from worker.models.job import Job
 from worker.workflows.transcript_workflow import process_transcript
 
@@ -20,7 +24,10 @@ init_db()  # ensure the jobs table exists on import
 
 
 @router.post("/transcripts/process", status_code=202)
-async def process_transcript_async(file: UploadFile = File(...)):
+async def process_transcript_async(
+    file: UploadFile = File(...),
+    principal: Principal = Depends(get_current_user),
+):
     """Validate upload, persist a PENDING job, enqueue it, return job_id."""
     if not file.filename:
         raise HTTPException(status_code=422, detail="Missing filename")
@@ -51,6 +58,7 @@ async def process_transcript_async(file: UploadFile = File(...)):
     try:
         job = Job(
             id=job_id,
+            tenant_id=principal.tenant_id,
             status="PENDING",
             input_payload=json.dumps({"filename": file.filename}),
         )
@@ -69,11 +77,18 @@ async def process_transcript_async(file: UploadFile = File(...)):
 
 
 @router.get("/jobs/{job_id}")
-async def get_job(job_id: str):
-    """Return job status and result payload once completed."""
+async def get_job(
+    job_id: str,
+    principal: Principal = Depends(get_current_user),
+):
+    """Return job status and result payload once completed (tenant-scoped)."""
     db = SessionLocal()
     try:
-        job = db.get(Job, job_id)
+        job = (
+            db.query(Job)
+            .filter(Job.id == job_id, Job.tenant_id == principal.tenant_id)
+            .first()
+        )
     finally:
         db.close()
 
@@ -96,4 +111,3 @@ async def get_job(job_id: str):
         response["error"] = job.error
 
     return response
-
