@@ -83,3 +83,43 @@ def test_retention_policy_enforcement():
     finally:
         db.close()
 
+
+def test_stripe_subscription_lifecycle_and_reset():
+    db = SessionLocal()
+    try:
+        org = Organization(
+            name="Stripe Test Org",
+            tier="PILOT",
+            stripe_customer_id="cus_test_12345",
+            monthly_audio_quota_seconds=3600.0,
+            consumed_audio_seconds=3500.0
+        )
+        db.add(org)
+        db.commit()
+
+        # Simulate renewal payment success -> consumed usage should reset to 0
+        success = MeteringService.handle_subscription_payment_succeeded(
+            db=db,
+            stripe_customer_id="cus_test_12345",
+            current_period_end_timestamp=1735689600
+        )
+        assert success is True
+        db.refresh(org)
+        assert org.consumed_audio_seconds == 0.0
+        assert org.current_period_end is not None
+
+        # Simulate subscription upgrade to Enterprise
+        upgrade_ok = MeteringService.update_subscription_tier(
+            db=db,
+            stripe_customer_id="cus_test_12345",
+            new_tier="ENTERPRISE",
+            monthly_quota_seconds=720000.0
+        )
+        assert upgrade_ok is True
+        db.refresh(org)
+        assert org.tier == "ENTERPRISE"
+        assert org.monthly_audio_quota_seconds == 720000.0
+    finally:
+        db.close()
+
+

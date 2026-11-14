@@ -3,12 +3,42 @@
 import os
 import uuid
 import shutil
+import logging
 from typing import Dict, Any, Optional
+
+logger = logging.getLogger(__name__)
 
 AWS_S3_BUCKET = os.getenv("AWS_S3_BUCKET")
 AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
 GCS_BUCKET = os.getenv("GCS_BUCKET")
 LOCAL_STORAGE_DIR = os.getenv("LOCAL_STORAGE_DIR", "temp_audit_uploads")
+
+
+def get_s3_client(region: Optional[str] = None):
+    """
+    Returns a boto3 S3 client supporting Zero-Trust IAM roles / instance profiles.
+    If AWS_ACCESS_KEY_ID is set in env, it uses it; otherwise it delegates to
+    AWS IRSA, ECS task roles, or EC2 instance profiles without failing.
+    """
+    import boto3
+    from botocore.config import Config
+
+    reg = region or AWS_REGION
+    cfg = Config(retries={"max_attempts": 3, "mode": "standard"})
+
+    aws_key = os.getenv("AWS_ACCESS_KEY_ID")
+    aws_secret = os.getenv("AWS_SECRET_ACCESS_KEY")
+
+    if aws_key and aws_secret:
+        return boto3.client(
+            "s3",
+            region_name=reg,
+            aws_access_key_id=aws_key,
+            aws_secret_access_key=aws_secret,
+            config=cfg,
+        )
+    # Zero-Trust IAM / Pod Identity / Instance Profile fallback
+    return boto3.client("s3", region_name=reg, config=cfg)
 
 
 class StorageGateway:
@@ -32,8 +62,7 @@ class StorageGateway:
 
         if AWS_S3_BUCKET:
             try:
-                import boto3
-                s3_client = boto3.client("s3", region_name=AWS_REGION)
+                s3_client = get_s3_client(AWS_REGION)
                 key = f"recordings/{safe_filename}"
                 url = s3_client.generate_presigned_url(
                     ClientMethod="put_object",
@@ -52,7 +81,7 @@ class StorageGateway:
                     "headers": {"Content-Type": content_type}
                 }
             except Exception as e:
-                pass  # Fall back to local if boto3 or creds fail
+                logger.warning(f"S3 presigned upload generation failed, falling back to local: {e}")
 
         # Local simulation fallback
         local_path = os.path.join(LOCAL_STORAGE_DIR, safe_filename)
@@ -73,12 +102,10 @@ class StorageGateway:
             return storage_uri.replace("local://", "")
 
         if storage_uri.startswith("s3://"):
-            import boto3
-            # s3://bucket/key
             parts = storage_uri.replace("s3://", "").split("/", 1)
             bucket, key = parts[0], parts[1]
             local_dest = os.path.join(LOCAL_STORAGE_DIR, os.path.basename(key))
-            s3_client = boto3.client("s3")
+            s3_client = get_s3_client()
             s3_client.download_file(bucket, key, local_dest)
             return local_dest
 
@@ -89,10 +116,9 @@ class StorageGateway:
         """Deletes a file from S3, GCS, or local filesystem."""
         try:
             if storage_uri.startswith("s3://"):
-                import boto3
                 parts = storage_uri.replace("s3://", "").split("/", 1)
                 bucket, key = parts[0], parts[1]
-                s3_client = boto3.client("s3")
+                s3_client = get_s3_client()
                 s3_client.delete_object(Bucket=bucket, Key=key)
                 return True
             elif storage_uri.startswith("local://"):

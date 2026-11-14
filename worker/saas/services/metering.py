@@ -1,6 +1,6 @@
 """Credit metering service: Enforces audio-hour quotas and tracks LLM token spend per tenant."""
 
-from typing import Dict, Any, Tuple
+from typing import Dict, Any, Tuple, Optional
 from sqlalchemy.orm import Session
 from worker.saas.models.organization import Organization
 
@@ -59,4 +59,41 @@ class MeteringService:
             "percent_consumed": round(percent_used, 1),
             "total_token_cost_usd": round(org.total_token_cost_usd, 4)
         }
+
+    @staticmethod
+    def handle_subscription_payment_succeeded(
+        db: Session,
+        stripe_customer_id: str,
+        current_period_end_timestamp: Optional[int] = None
+    ) -> bool:
+        """Resets consumed quota when an invoice/subscription renewal payment succeeds."""
+        from datetime import datetime, timezone
+        org = db.query(Organization).filter(Organization.stripe_customer_id == stripe_customer_id).first()
+        if not org:
+            return False
+
+        org.consumed_audio_seconds = 0.0
+        if current_period_end_timestamp:
+            org.current_period_end = datetime.fromtimestamp(current_period_end_timestamp, tz=timezone.utc)
+        db.commit()
+        return True
+
+    @staticmethod
+    def update_subscription_tier(
+        db: Session,
+        stripe_customer_id: str,
+        new_tier: str,
+        monthly_quota_seconds: Optional[float] = None
+    ) -> bool:
+        """Updates plan tier and monthly quota upon subscription change/downgrade."""
+        org = db.query(Organization).filter(Organization.stripe_customer_id == stripe_customer_id).first()
+        if not org:
+            return False
+
+        org.tier = new_tier.upper()
+        if monthly_quota_seconds is not None:
+            org.monthly_audio_quota_seconds = monthly_quota_seconds
+        db.commit()
+        return True
+
 

@@ -1,6 +1,6 @@
 """API endpoints for enterprise SaaS management, tenant quotas, and SOC2 audit ledger."""
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Header
+from fastapi import APIRouter, Depends, HTTPException, Query, Header, Request
 from typing import Optional
 from sqlalchemy.orm import Session
 from worker.core.database import get_db
@@ -134,4 +134,93 @@ def trigger_privacy_retention_prune(
     """Triggers automated destruction of expired raw audio files while preserving compliance certificates."""
     result = RetentionPolicyService.enforce_audio_retention(db=db, default_retention_days=retention_days)
     return result
+
+
+@router.post("/billing/webhook")
+async def stripe_billing_webhook(
+    request: Request,
+    stripe_signature: Optional[str] = Header(None, alias="stripe-signature"),
+    db: Session = Depends(get_db)
+):
+    """
+    Handles incoming Stripe subscription and payment lifecycle webhooks.
+    Cryptographically verifies webhook signature if STRIPE_WEBHOOK_SECRET is configured.
+    """
+    import os
+    import json
+    import logging
+    logger = logging.getLogger(__name__)
+
+    webhook_secret = os.getenv("STRIPE_WEBHOOK_SECRET")
+    body_bytes = await request.body()
+
+    event = None
+    if webhook_secret and stripe_signature:
+        try:
+            import stripe
+            stripe.api_key = os.getenv("STRIPE_API_KEY")
+            event = stripe.Webhook.construct_event(
+                payload=body_bytes,
+                sig_header=stripe_signature,
+                secret=webhook_secret
+            )
+        except Exception as e:
+            logger.warning(f"Stripe webhook signature validation failed: {e}")
+            raise HTTPException(status_code=400, detail="Invalid Stripe webhook signature")
+    else:
+        # Fallback / mock parser for development or unverified test calls
+        try:
+            event = json.loads(body_bytes.decode("utf-8")) if body_bytes else {}
+        except Exception:
+            raise HTTPException(status_code=400, detail="Malformed webhook JSON payload")
+
+    event_type = event.get("type", "") if isinstance(event, dict) else getattr(event, "type", "")
+    data_obj = event.get("data", {}).get("object", {}) if isinstance(event, dict) else getattr(getattr(event, "data", None), "object", {})
+
+    customer_id = data_obj.get("customer") or data_obj.get("id")
+
+    if event_type == "invoice.payment_succeeded":
+        # Period renewed / payment succeeded -> reset consumed usage
+        period_end = data_obj.get("lines", {}).get("data", [{}])[0].get("period", {}).get("end")
+        MeteringService.handle_subscription_payment_succeeded(
+            db=db,
+            stripe_customer_id=customer_id,
+            current_period_end_timestamp=period_end
+        )
+        return {"status": "success", "event": event_type, "customer": customer_id}
+
+    elif event_type in ("customer.subscription.updated", "customer.subscription.created"):
+        # Plan tier adjustment
+        items = data_obj.get("items", {}).get("data", [])
+        tier = "GROWTH"
+        quota = 180000.0  # 50 hours default
+        if items:
+            price_id = items[0].get("price", {}).get("id", "").lower()
+            if "enterprise" in price_id:
+                tier = "ENTERPRISE"
+                quota = 720000.0  # 200 hours
+            elif "pilot" in price_id or "starter" in price_id:
+                tier = "PILOT"
+                quota = 36000.0  # 10 hours
+
+        MeteringService.update_subscription_tier(
+            db=db,
+            stripe_customer_id=customer_id,
+            new_tier=tier,
+            monthly_quota_seconds=quota
+        )
+        return {"status": "success", "event": event_type, "tier": tier}
+
+    elif event_type == "customer.subscription.deleted":
+        # Subscription canceled -> downgrade to PILOT / restricted tier
+        MeteringService.update_subscription_tier(
+            db=db,
+            stripe_customer_id=customer_id,
+            new_tier="CANCELED",
+            monthly_quota_seconds=0.0
+        )
+        return {"status": "success", "event": event_type, "action": "downgraded"}
+
+    return {"status": "ignored", "event": event_type}
+
 

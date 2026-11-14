@@ -24,6 +24,11 @@ class Organization(Base):
     raw_audio_retention_days = Column(Integer, default=30)  # Purge raw audio after 30 days
     certificate_retention_years = Column(Integer, default=7)  # Retain SHA-256 certs for 7 yrs
     
+    # Stripe Billing & Subscription Lifecycle
+    stripe_customer_id = Column(String(255), index=True, nullable=True)
+    stripe_subscription_id = Column(String(255), index=True, nullable=True)
+    current_period_end = Column(DateTime, nullable=True)
+    
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 

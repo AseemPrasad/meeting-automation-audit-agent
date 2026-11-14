@@ -106,3 +106,18 @@ def cleanup() -> None:
         metrics.get_meter_provider().shutdown()
     except Exception:  # noqa: BLE001
         pass
+
+
+def inject_trace_headers(headers: Optional[dict] = None) -> dict:
+    """Injects current active W3C trace context into Celery task headers for end-to-end tracing."""
+    hdrs = dict(headers or {})
+    if not os.getenv("OTEL_ENABLED", "").strip().lower() in {"1", "true", "yes"}:
+        return hdrs
+
+    try:
+        from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
+        TraceContextTextMapPropagator().inject(carrier=hdrs)
+    except Exception:
+        pass
+    return hdrs
+

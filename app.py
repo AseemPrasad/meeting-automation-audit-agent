@@ -15,6 +15,12 @@ load_dotenv()
 
 app = FastAPI()
 
+# Reverse Proxy / Ingress support: trust forwarded headers (X-Forwarded-Proto, X-Forwarded-For)
+from starlette.middleware.trustedhost import TrustedHostMiddleware
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+
+app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=["*"])
+
 # Serve static files
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
