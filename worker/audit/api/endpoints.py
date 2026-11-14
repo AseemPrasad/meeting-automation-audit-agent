@@ -13,10 +13,20 @@ from worker.services.storage.storage_manager import storage_gateway
 
 from worker.saas.services.metering import MeteringService
 
-from typing import Optional
+from typing import Optional, Dict, Any
+from pydantic import BaseModel
+from worker.audit.schemas.compliance import AuditReportResponse
 import re
 
 ALLOWED_AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".ogg", ".flac", ".mp4", ".mov", ".webm", ".aac"}
+
+
+class AuditJobStatusResponse(BaseModel):
+    job_id: str
+    status: str
+    error: Optional[str] = None
+    report: Optional[AuditReportResponse] = None
+
 
 router = APIRouter(prefix="/api/v2/audit", tags=["AuditAgent Compliance Engine"])
 
@@ -129,15 +139,26 @@ async def submit_audit_recording(
     }
 
 
-@router.get("/report/{job_id}")
-def get_audit_report(job_id: str):
-    """Retrieve verified compliance report, timestamped claims, and tamper-proof hash."""
+@router.get("/report/{job_id}", response_model=AuditJobStatusResponse)
+def get_audit_report(
+    job_id: str,
+    x_org_id: Optional[str] = Header(None)
+):
+    """
+    Retrieve verified compliance report, timestamped claims, and tamper-proof hash.
+    Enforces multi-tenant isolation: rejects access if requested by a mismatched organization.
+    """
     db_gen = get_db()
     db = next(db_gen)
     try:
         job = db.query(Job).filter(Job.id == job_id).first()
         if not job:
             raise HTTPException(status_code=404, detail="Audit job not found")
+
+        # Multi-tenant isolation check
+        if job.tenant_id and job.tenant_id != "default" and x_org_id:
+            if job.tenant_id != x_org_id:
+                raise HTTPException(status_code=403, detail="Unauthorized access to this tenant's audit report.")
 
         return {
             "job_id": job.id,

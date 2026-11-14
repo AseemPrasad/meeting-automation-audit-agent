@@ -12,12 +12,14 @@ from worker.audit.agents.role_resolver import resolve_speaker_roles
 from worker.audit.agents.auditor import audit_transcript_compliance
 from worker.audit.schemas.compliance import EvidenceItem
 from worker.saas.services.metering import MeteringService
+from worker.services.llm.pricing import calculate_cost
 from groq import Groq
 
 
 @celery_app.task(
     name="worker.audit.process_audit_recording",
     bind=True,
+    queue="audit_queue",
     max_retries=3,
     default_retry_delay=5
 )
@@ -43,11 +45,14 @@ def process_audit_recording_task(
         db.commit()
 
     try:
-        # Calculate raw audio binary hash for court-admissible audit proof
+        # Calculate raw audio binary hash in streaming 64KB blocks (RAM bounded)
         audio_sha256 = None
         if os.path.exists(file_path):
+            hasher = hashlib.sha256()
             with open(file_path, "rb") as af:
-                audio_sha256 = hashlib.sha256(af.read()).hexdigest()
+                while chunk := af.read(65536):
+                    hasher.update(chunk)
+            audio_sha256 = hasher.hexdigest()
 
         # Step 1: Handle audio files and chunking
         audio_chunks = split_audio_if_needed(file_path, max_chunk_mb=24.0)
@@ -148,14 +153,19 @@ def process_audit_recording_task(
             audio_sha256=audio_sha256
         )
 
-        # Step 4: Deduct B2B tenant credit quota if org_id is provided
+        # Step 4: Deduct B2B tenant credit quota and dynamic token cost
         if org_id:
             try:
+                # Dynamic token cost calculation (~4 chars per token)
+                est_prompt_tokens = len(raw_transcript) // 4 + 600
+                est_completion_tokens = 900
+                calc_usd = calculate_cost("llama-3.1-70b-versatile", est_prompt_tokens, est_completion_tokens)
+                
                 MeteringService.deduct_usage(
                     db=db,
                     org_id=org_id,
                     actual_audio_seconds=max(total_audio_seconds, 15.0),
-                    token_cost_usd=0.015
+                    token_cost_usd=max(calc_usd, 0.002)
                 )
             except Exception:
                 pass

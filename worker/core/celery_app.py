@@ -16,7 +16,10 @@ celery_app = Celery(
     "meeting_automation",
     broker=REDIS_URL,
     backend=REDIS_URL,
-    include=["worker.workflows.transcript_workflow"],
+    include=[
+        "worker.workflows.transcript_workflow",
+        "worker.audit.workflows.audit_workflow"
+    ],
 )
 
 celery_app.conf.update(
