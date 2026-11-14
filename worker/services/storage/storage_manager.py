@@ -85,6 +85,28 @@ class StorageGateway:
         # Default: treat as local path directly
         return storage_uri
 
+    def delete_file(self, storage_uri: str) -> bool:
+        """Deletes a file from S3, GCS, or local filesystem."""
+        try:
+            if storage_uri.startswith("s3://"):
+                import boto3
+                parts = storage_uri.replace("s3://", "").split("/", 1)
+                bucket, key = parts[0], parts[1]
+                s3_client = boto3.client("s3")
+                s3_client.delete_object(Bucket=bucket, Key=key)
+                return True
+            elif storage_uri.startswith("local://"):
+                l_path = storage_uri.replace("local://", "")
+                if os.path.exists(l_path):
+                    os.remove(l_path)
+                    return True
+            elif os.path.exists(storage_uri):
+                os.remove(storage_uri)
+                return True
+        except Exception:
+            return False
+        return False
+
 
 storage_gateway = StorageGateway()
 

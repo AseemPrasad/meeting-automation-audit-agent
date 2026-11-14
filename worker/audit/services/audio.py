@@ -43,7 +43,13 @@ def split_audio_if_needed(file_path: str, max_chunk_mb: float = 24.0) -> List[Tu
         output_pattern
     ]
     try:
-        subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+        subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=True,
+            timeout=180
+        )
         # Collect generated chunks
         dir_name = os.path.dirname(file_path) or "."
         base_prefix = f"{os.path.basename(file_path)}_chunk_"
