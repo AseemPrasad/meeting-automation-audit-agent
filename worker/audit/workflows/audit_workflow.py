@@ -11,6 +11,7 @@ from worker.audit.services.diarization import diarize_audio_recording
 from worker.audit.agents.role_resolver import resolve_speaker_roles
 from worker.audit.agents.auditor import audit_transcript_compliance
 from worker.audit.schemas.compliance import EvidenceItem
+from worker.services.storage.storage_manager import storage_gateway
 from worker.saas.services.metering import MeteringService
 from worker.services.llm.pricing import calculate_cost
 from groq import Groq
@@ -45,24 +46,27 @@ def process_audit_recording_task(
         db.commit()
 
     try:
+        # Resolve storage URI (s3://, gcs://, local://) to accessible worker file
+        local_file_path = storage_gateway.fetch_file_for_worker(file_path)
+
         # Calculate raw audio binary hash in streaming 64KB blocks (RAM bounded)
         audio_sha256 = None
-        if os.path.exists(file_path):
+        if os.path.exists(local_file_path):
             hasher = hashlib.sha256()
-            with open(file_path, "rb") as af:
+            with open(local_file_path, "rb") as af:
                 while chunk := af.read(65536):
                     hasher.update(chunk)
             audio_sha256 = hasher.hexdigest()
 
         # Step 1: Handle audio files and chunking
-        audio_chunks = split_audio_if_needed(file_path, max_chunk_mb=24.0)
+        audio_chunks = split_audio_if_needed(local_file_path, max_chunk_mb=24.0)
 
         # Step 2: Transcribe via Whisper & Diarize
         groq_api_key = os.getenv("GROQ_API_KEY")
         client = Groq(api_key=groq_api_key) if groq_api_key else None
 
         # Run speaker diarization and role attribution
-        diarized_utterances = diarize_audio_recording(file_path)
+        diarized_utterances = diarize_audio_recording(local_file_path)
         speaker_map = resolve_speaker_roles(diarized_utterances)
 
         full_transcript_parts = []
@@ -86,7 +90,15 @@ def process_audit_recording_task(
                     else:
                         text = getattr(transcription, "text", str(transcription))
                         segments = getattr(transcription, "segments", []) or []
-                        duration = float(getattr(transcription, "duration", 0.0))
+                        duration = float(getattr(transcription, "duration", 0.0) or 0.0)
+
+                    # Fallback to segment boundaries if top-level duration is missing
+                    if duration <= 0.0 and segments:
+                        max_end = max(
+                            float(s.get("end", 0.0) if isinstance(s, dict) else getattr(s, "end", 0.0))
+                            for s in segments
+                        )
+                        duration = max_end
 
                     total_audio_seconds += duration
                     full_transcript_parts.append(text)
@@ -101,10 +113,10 @@ def process_audit_recording_task(
                             start = float(getattr(seg, "start", 0.0)) + offset_sec
                             end = float(getattr(seg, "end", 0.0)) + offset_sec
 
-                        # Attribute speaker based on diarization overlap
+                        # Attribute speaker based on true interval intersection
                         attributed_speaker = "Advisor / Firm" if "fee" in seg_text.lower() or "risk" in seg_text.lower() else "Client"
                         for u in diarized_utterances:
-                            if u.start <= start <= u.end or u.start <= end <= u.end:
+                            if min(end, u.end) - max(start, u.start) > 0:
                                 attributed_speaker = speaker_map.get(u.speaker, attributed_speaker)
                                 break
 
@@ -136,7 +148,7 @@ def process_audit_recording_task(
         finally:
             # Clean up temporary split chunks to prevent disk leaks
             for c_path, _ in audio_chunks:
-                if c_path != file_path and os.path.exists(c_path):
+                if c_path != local_file_path and os.path.exists(c_path):
                     try:
                         os.remove(c_path)
                     except Exception:
