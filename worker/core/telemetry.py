@@ -40,7 +40,13 @@ def _resource() -> Resource:
 
 
 def _configure_trace(exporter) -> None:
-    provider = TracerProvider(resource=_resource())
+    from opentelemetry.sdk.trace.sampling import TraceIdRatioBased, ParentBased
+
+    # Sampling ratio: default to 1.0 (100% in staging/dev), tune down in prod (e.g. 0.2)
+    sample_ratio = float(os.getenv("OTEL_SAMPLING_RATIO", "1.0"))
+    sampler = ParentBased(root=TraceIdRatioBased(sample_ratio))
+
+    provider = TracerProvider(resource=_resource(), sampler=sampler)
     provider.add_span_processor(BatchSpanProcessor(exporter))
     trace.set_tracer_provider(provider)
 
@@ -106,3 +112,18 @@ def cleanup() -> None:
         metrics.get_meter_provider().shutdown()
     except Exception:  # noqa: BLE001
         pass
+
+
+def inject_trace_headers(headers: Optional[dict] = None) -> dict:
+    """Injects current active W3C trace context into Celery task headers for end-to-end tracing."""
+    hdrs = dict(headers or {})
+    if not os.getenv("OTEL_ENABLED", "").strip().lower() in {"1", "true", "yes"}:
+        return hdrs
+
+    try:
+        from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
+        TraceContextTextMapPropagator().inject(carrier=hdrs)
+    except Exception:
+        pass
+    return hdrs
+

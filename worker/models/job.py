@@ -1,5 +1,6 @@
 """Job model: persists state transitions and extraction payloads."""
 import uuid
+import json
 from datetime import datetime, timezone
 
 from sqlalchemy import Column, DateTime, String, Text
@@ -26,6 +27,24 @@ class Job(Base):
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
+
+    @property
+    def result(self):
+        """Dynamic hybrid property to read parsed JSON from result_payload."""
+        if self.result_payload:
+            try:
+                return json.loads(self.result_payload)
+            except Exception:
+                return self.result_payload
+        return None
+
+    @result.setter
+    def result(self, value):
+        """Dynamic hybrid setter to serialize dict/list into result_payload."""
+        if isinstance(value, (dict, list)):
+            self.result_payload = json.dumps(value)
+        else:
+            self.result_payload = value
 
     def __repr__(self) -> str:  # pragma: no cover - debug helper
         return f"<Job id={self.id} status={self.status}>"

@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AuditAgent — Enterprise Compliance & Contract Verification</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background-color: #0f172a; color: #f8fafc; margin: 0; padding: 24px; }
+        .audit-card { max-width: 900px; margin: 0 auto; background: #1e293b; border-radius: 12px; padding: 32px; border: 1px solid #334155; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.5); }
+        .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #334155; padding-bottom: 20px; }
+        .badge { background: #0369a1; color: #38bdf8; padding: 4px 12px; border-radius: 9999px; font-size: 12px; font-weight: 600; text-transform: uppercase; }
+        .form-group { margin-top: 24px; }
+        label { display: block; font-weight: 600; margin-bottom: 8px; color: #cbd5e1; }
+        select, input[type="file"] { width: 100%; padding: 12px; border-radius: 8px; background: #0f172a; border: 1px solid #475569; color: #f8fafc; font-size: 14px; box-sizing: border-box; }
+        .btn-audit { margin-top: 24px; width: 100%; padding: 14px; background: #2563eb; color: white; border: none; border-radius: 8px; font-size: 16px; font-weight: 600; cursor: pointer; transition: 0.2s ease; }
+        .btn-audit:hover { background: #1d4ed8; }
+        #results { margin-top: 32px; display: none; }
+        .score-box { background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 20px; margin-bottom: 20px; }
+        .status-badge { display: inline-block; padding: 6px 16px; border-radius: 6px; font-weight: 700; margin-top: 8px; }
+        .status-COMPLIANT { background: #064e3b; color: #34d399; }
+        .status-NEEDS_LEGAL_REVIEW { background: #78350f; color: #fbbf24; }
+        .status-NON_COMPLIANT { background: #7f1d1d; color: #f87171; }
+        .evidence-row { background: #0f172a; border-left: 4px solid #38bdf8; padding: 12px 16px; margin-top: 12px; border-radius: 4px; }
+        .hash-code { font-family: monospace; font-size: 11px; color: #94a3b8; word-break: break-all; margin-top: 8px; }
+    </style>
+</head>
+<body>
+
+<div class="audit-card">
+    <div class="header">
+        <div>
+            <h1 style="margin: 0; font-size: 24px;">AuditAgent</h1>
+            <p style="margin: 4px 0 0 0; color: #94a3b8; font-size: 14px;">High-Stakes Compliance & Contract Evidentiary Verification</p>
+        </div>
+        <span class="badge">Zero-Hallucination v2</span>
+    </div>
+
+    <form id="auditForm">
+        <div class="form-group">
+            <label for="orgId">Organization ID (Optional - for B2B Quota & SOC2 Logging):</label>
+            <input type="text" id="orgId" name="org_id" placeholder="e.g. apex-wealth-partners" style="width: 100%; padding: 12px; border-radius: 8px; background: #0f172a; border: 1px solid #475569; color: #f8fafc; font-size: 14px; box-sizing: border-box;">
+        </div>
+
+        <div class="form-group">
+            <label for="template">Select Regulatory Framework / Checklist:</label>
+            <select id="template" name="template">
+                <option value="FINRA_REG_BI">FINRA / SEC Reg BI (Financial Advisory & Disclosures)</option>
+                <option value="COMMERCIAL_SLA">Commercial Contract, Pricing Lock & SLA Commitments</option>
+                <option value="GENERAL_EXECUTIVE">Executive Quorum & Budget Authorization</option>
+            </select>
+        </div>
+
+        <div class="form-group">
+            <label for="audioFile">Upload Meeting / Deposition Recording (Audio or Video):</label>
+            <input type="file" id="audioFile" name="file" accept="audio/*,video/*" required>
+        </div>
+
+        <button type="submit" class="btn-audit" id="submitBtn">Run Evidentiary Audit</button>
+    </form>
+
+    <div id="results">
+        <div class="score-box">
+            <h3 style="margin-top: 0;">Audit Findings</h3>
+            <div id="statusTag"></div>
+            <p id="summaryText" style="color: #cbd5e1; margin-top: 12px;"></p>
+            <div class="hash-code">Cryptographic Seal (SHA-256): <span id="sha256Seal"></span></div>
+        </div>
+
+        <h3>Verified Evidentiary Matrix</h3>
+        <div id="evidenceList"></div>
+    </div>
+</div>
+
+<script>
+    const form = document.getElementById('auditForm');
+    const submitBtn = document.getElementById('submitBtn');
+    const results = document.getElementById('results');
+
+    form.onsubmit = async (e) => {
+        e.preventDefault();
+        submitBtn.disabled = true;
+        submitBtn.innerText = "Uploading & Analyzing Audio...";
+
+        const fileInput = document.getElementById("audioFile");
+        const file = fileInput.files[0];
+        const templateVal = document.getElementById("template").value;
+        const orgIdVal = document.getElementById("orgId").value.trim();
+
+        try {
+            // Step 1: Attempt direct cloud presigned upload if available
+            let uploadSuccess = false;
+            let cloudStorageUri = null;
+
+            try {
+                const presignResp = await fetch(`/api/v2/audit/upload-url?filename=${encodeURIComponent(file.name)}&content_type=${encodeURIComponent(file.type || 'audio/mpeg')}`, {
+                    method: "POST"
+                });
+                if (presignResp.ok) {
+                    const presignData = await presignResp.json();
+                    if (presignData.storage_backend === "s3" && presignData.upload_url) {
+                        // Direct PUT to S3
+                        submitBtn.innerText = "Direct-to-Cloud Upload in Progress...";
+                        const putResp = await fetch(presignData.upload_url, {
+                            method: "PUT",
+                            headers: presignData.headers || {},
+                            body: file
+                        });
+                        if (putResp.ok) {
+                            uploadSuccess = true;
+                            cloudStorageUri = presignData.storage_uri;
+                        }
+                    }
+                }
+            } catch (pErr) {
+                // Graceful fallback to standard multipart form
+            }
+
+            // Step 2: Submit to Audit Engine (Bypasses sending file bytes if already uploaded to S3)
+            const formData = new FormData();
+            if (orgIdVal) formData.append("org_id", orgIdVal);
+            formData.append("template", templateVal);
+
+            if (uploadSuccess && cloudStorageUri) {
+                // Send lightweight storage URI - saves browser bandwidth and web server RAM
+                formData.append("storage_uri", cloudStorageUri);
+            } else {
+                // Standard multipart upload fallback
+                formData.append("file", file);
+            }
+
+            submitBtn.innerText = "Processing Audio & Adversarial Verification...";
+            const resp = await fetch("/api/v2/audit/analyze", {
+                method: "POST",
+                body: formData
+            });
+            const data = await resp.json();
+            
+            // Poll for completion with a 15-minute timeout guard (450 attempts * 2s)
+            const jobId = data.job_id;
+            let pollAttempts = 0;
+            const MAX_POLL_ATTEMPTS = 450;
+
+            const pollInterval = setInterval(async () => {
+                pollAttempts++;
+                if (pollAttempts >= MAX_POLL_ATTEMPTS) {
+                    clearInterval(pollInterval);
+                    alert("Audit processing timed out. Please check your report later using Job ID: " + jobId);
+                    submitBtn.disabled = false;
+                    submitBtn.innerText = "Run Evidentiary Audit";
+                    return;
+                }
+
+                const pollResp = await fetch(`/api/v2/audit/report/${jobId}`, {
+                    headers: orgIdVal ? { "X-Org-ID": orgIdVal } : {}
+                });
+                const pollData = await pollResp.json();
+
+                if (pollData.status === "COMPLETED" || pollData.report) {
+                    clearInterval(pollInterval);
+                    renderReport(pollData.report);
+                    submitBtn.disabled = false;
+                    submitBtn.innerText = "Run Evidentiary Audit";
+                } else if (pollData.status === "FAILED") {
+                    clearInterval(pollInterval);
+                    alert("Audit failed: " + pollData.error);
+                    submitBtn.disabled = false;
+                    submitBtn.innerText = "Run Evidentiary Audit";
+                }
+            }, 2000);
+
+        } catch (err) {
+            alert("Error: " + err.message);
+            submitBtn.disabled = false;
+            submitBtn.innerText = "Run Evidentiary Audit";
+        }
+    };
+
+    function renderReport(report) {
+        results.style.display = "block";
+        document.getElementById("statusTag").innerHTML = `
+            <span class="status-badge status-${report.overall_status}">${report.overall_status} — ${report.compliance_score}% Score</span>
+        `;
+        document.getElementById("summaryText").innerText = report.summary_findings;
+        document.getElementById("sha256Seal").innerText = report.tamper_proof_sha256;
+
+        const container = document.getElementById("evidenceList");
+        container.innerHTML = "";
+
+        report.requirements_evaluated.forEach(req => {
+            const div = document.createElement("div");
+            div.className = "evidence-row";
+            div.innerHTML = `
+                <strong>${req.title}</strong> — <span style="color:${req.passed ? '#34d399' : '#f87171'}">${req.passed ? 'PASSED' : 'FLAGGED / OMITTED'}</span>
+                <p style="margin: 4px 0 0 0; font-size: 13px; color: #94a3b8;">${req.findings}</p>
+            `;
+            container.appendChild(div);
+        });
+    }
+</script>
+</body>
+</html>
+
