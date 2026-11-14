@@ -136,9 +136,21 @@
             });
             const data = await resp.json();
             
-            // Poll for completion
+            // Poll for completion with a 15-minute timeout guard (450 attempts * 2s)
             const jobId = data.job_id;
+            let pollAttempts = 0;
+            const MAX_POLL_ATTEMPTS = 450;
+
             const pollInterval = setInterval(async () => {
+                pollAttempts++;
+                if (pollAttempts >= MAX_POLL_ATTEMPTS) {
+                    clearInterval(pollInterval);
+                    alert("Audit processing timed out. Please check your report later using Job ID: " + jobId);
+                    submitBtn.disabled = false;
+                    submitBtn.innerText = "Run Evidentiary Audit";
+                    return;
+                }
+
                 const pollResp = await fetch(`/api/v2/audit/report/${jobId}`, {
                     headers: orgIdVal ? { "X-Org-ID": orgIdVal } : {}
                 });

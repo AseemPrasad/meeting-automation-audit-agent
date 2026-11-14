@@ -43,17 +43,20 @@ def audit_transcript_compliance(
         title = rule["title"]
         desc = rule["description"]
 
-        # Match evidence to this rule
+        # Match evidence to this rule with stop-word filtering
+        STOP_WORDS = {"mandatory", "clear", "documented", "the", "and", "must", "with", "for", "have", "agreement"}
+        title_terms = [t for t in title.lower().split() if t not in STOP_WORDS and len(t) > 2]
+        desc_terms = [t for t in desc.lower().split() if t not in STOP_WORDS and len(t) > 3]
+
         matched_evidence = [
             item for item in verified_claims
-            if any(term in item.claim.lower() for term in title.lower().split()[:3])
-            or any(term in item.verbatim_quote.lower() for term in desc.lower().split()[:3])
+            if any(term in item.claim.lower() for term in title_terms[:4])
+            or any(term in item.verbatim_quote.lower() for term in desc_terms[:4])
         ]
 
         if not matched_evidence:
-            # Fallback heuristic: check if key concepts exist in transcript
-            key_terms = [t for t in desc.lower().split() if len(t) > 5]
-            matched_terms = [t for t in key_terms if t in transcript_lower]
+            # Fallback heuristic: check if substantive concepts exist in transcript
+            matched_terms = [t for t in desc_terms if t in transcript_lower]
             if len(matched_terms) >= 2:
                 # Disclosed in transcript
                 passed = True
@@ -96,11 +99,12 @@ def audit_transcript_compliance(
         f"Identified {len(unsubstantiated)} unsubstantiated/hallucinated claim(s)."
     )
 
-    # 3. Create SHA-256 seal for tamper proofing (including raw audio binary hash and org_id)
+    # 3. Create SHA-256 seal for tamper proofing (including raw audio binary hash and org_id with normalized line-endings)
+    normalized_transcript = raw_transcript.replace("\r\n", "\n").strip()
     payload_to_hash = json.dumps({
         "org_id": org_id or "unassigned_tenant",
         "audio_sha256": audio_sha256 or "no_audio_hash_provided",
-        "transcript": raw_transcript,
+        "transcript": normalized_transcript,
         "score": score,
         "template": template_name,
         "findings": summary_findings

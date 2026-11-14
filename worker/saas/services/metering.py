@@ -36,14 +36,18 @@ class MeteringService:
         actual_audio_seconds: float,
         token_cost_usd: float = 0.0
     ) -> Dict[str, Any]:
-        """Deducts consumed audio seconds and records LLM inference cost."""
+        """Atomically deducts consumed audio seconds and records LLM inference cost to prevent race conditions."""
         org = db.query(Organization).filter(Organization.id == org_id).first()
         if not org:
             return {"status": "unmetered"}
 
-        org.consumed_audio_seconds += actual_audio_seconds
-        org.total_token_cost_usd += token_cost_usd
+        # Atomic SQL-level increment preventing lost-update race conditions
+        db.query(Organization).filter(Organization.id == org_id).update({
+            Organization.consumed_audio_seconds: Organization.consumed_audio_seconds + actual_audio_seconds,
+            Organization.total_token_cost_usd: Organization.total_token_cost_usd + token_cost_usd
+        })
         db.commit()
+        db.refresh(org)
 
         remaining = max(0.0, org.monthly_audio_quota_seconds - org.consumed_audio_seconds)
         percent_used = (org.consumed_audio_seconds / org.monthly_audio_quota_seconds * 100.0) if org.monthly_audio_quota_seconds > 0 else 100.0

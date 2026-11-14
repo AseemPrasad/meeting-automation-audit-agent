@@ -15,12 +15,16 @@ def get_audio_file_size_mb(file_path: str) -> float:
 
 def split_audio_if_needed(file_path: str, max_chunk_mb: float = 24.0) -> List[Tuple[str, float]]:
     """
-    Inspects audio file. If <= 24MB, returns [(file_path, 0.0)] with 0.0 offset.
-    If larger, attempts to use ffmpeg (if available) to compress/segment into chunks.
+    Inspects audio file. If <= 24MB and not video, returns [(file_path, 0.0)] with 0.0 offset.
+    If video container (.mp4, .mov, .webm) or > 24MB, uses ffmpeg to demux/segment to 16kHz mono audio.
     Returns list of tuples: [(chunk_file_path, start_time_offset_seconds)].
     """
     file_size_mb = get_audio_file_size_mb(file_path)
-    if file_size_mb <= max_chunk_mb:
+    file_ext = os.path.splitext(file_path)[1].lower()
+    is_video = file_ext in [".mp4", ".mov", ".webm", ".mkv", ".avi"]
+
+    # If small pure audio, return as is
+    if file_size_mb <= max_chunk_mb and not is_video:
         return [(file_path, 0.0)]
 
     ffmpeg_bin = shutil.which("ffmpeg")

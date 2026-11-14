@@ -181,6 +181,9 @@ def process_audit_recording_task(
                 est_prompt_tokens = len(raw_transcript) // 4 + 600
                 est_completion_tokens = 900
                 calc_usd = calculate_cost("llama-3.1-70b-versatile", est_prompt_tokens, est_completion_tokens)
+                if calc_usd <= 0.0:
+                    # Fallback to standard enterprise rate ($0.0007 / 1k prompt, $0.0008 / 1k completion)
+                    calc_usd = (est_prompt_tokens * 0.0000007) + (est_completion_tokens * 0.0000008)
                 
                 MeteringService.deduct_usage(
                     db=db,
