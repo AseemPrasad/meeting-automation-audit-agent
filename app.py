@@ -22,10 +22,12 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 from worker.api.v1.endpoints.jobs import router as jobs_router
 from worker.api.v1.endpoints.auth import router as auth_router
 from worker.audit.api.endpoints import router as audit_router
+from worker.saas.api.endpoints import router as saas_router
 
 app.include_router(jobs_router)
 app.include_router(auth_router)
 app.include_router(audit_router)
+app.include_router(saas_router)
 
 # Rate limiting (additive; falls back to in-memory if Redis is unavailable)
 from worker.middleware.rate_limit import RateLimitMiddleware
