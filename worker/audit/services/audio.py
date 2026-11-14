@@ -65,7 +65,18 @@ def split_audio_if_needed(file_path: str, max_chunk_mb: float = 24.0) -> List[Tu
         if generated_chunks:
             return generated_chunks
     except Exception:
-        pass
+        # Clean up any partial/corrupted chunk slices on error
+        try:
+            dir_name = os.path.dirname(file_path) or "."
+            base_prefix = f"{os.path.basename(file_path)}_chunk_"
+            for f in os.listdir(dir_name):
+                if f.startswith(base_prefix) and f.endswith(".mp3"):
+                    try:
+                        os.remove(os.path.join(dir_name, f))
+                    except Exception:
+                        pass
+        except Exception:
+            pass
 
     return [(file_path, 0.0)]
 

@@ -202,9 +202,14 @@ def process_audit_recording_task(
         return result_payload
 
     except Exception as exc:
+        is_last_retry = (self.request.retries >= self.max_retries)
         if job:
-            job.status = "FAILED"
-            job.error = str(exc)
+            if is_last_retry:
+                job.status = "FAILED"
+                job.error = str(exc)
+            else:
+                job.status = "RETRYING"
+                job.error = f"Retrying ({self.request.retries + 1}/{self.max_retries}): {exc}"
             db.commit()
         db.close()
         raise self.retry(exc=exc)

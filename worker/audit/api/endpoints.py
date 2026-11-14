@@ -94,7 +94,7 @@ async def submit_audit_recording(
             raise HTTPException(status_code=402, detail=reason)
 
     job_id = str(uuid.uuid4())
-    upload_dir = "temp_audit_uploads"
+    upload_dir = os.path.abspath("temp_audit_uploads")
     os.makedirs(upload_dir, exist_ok=True)
 
     if storage_uri:

@@ -48,6 +48,33 @@ def create_organization(
     }
 
 
+@router.get("/organizations")
+def list_organizations(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db)
+):
+    """Lists enterprise organizations with standard pagination."""
+    total_count = db.query(Organization).count()
+    orgs = db.query(Organization).order_by(Organization.created_at.desc()).offset(skip).limit(limit).all()
+    return {
+        "total_count": total_count,
+        "skip": skip,
+        "limit": limit,
+        "organizations": [
+            {
+                "org_id": o.id,
+                "name": o.name,
+                "tier": o.tier,
+                "quota_hours": round(o.monthly_audio_quota_seconds / 3600.0, 1),
+                "consumed_hours": round(o.consumed_audio_seconds / 3600.0, 2),
+                "created_at": o.created_at
+            }
+            for o in orgs
+        ]
+    }
+
+
 @router.get("/organizations/{org_id}/usage")
 def get_org_usage_and_metering(
     org_id: str,
