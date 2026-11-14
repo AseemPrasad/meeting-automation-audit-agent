@@ -21,9 +21,11 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 # Register async worker API (additive; original routes remain untouched)
 from worker.api.v1.endpoints.jobs import router as jobs_router
 from worker.api.v1.endpoints.auth import router as auth_router
+from worker.audit.api.endpoints import router as audit_router
 
 app.include_router(jobs_router)
 app.include_router(auth_router)
+app.include_router(audit_router)
 
 # Rate limiting (additive; falls back to in-memory if Redis is unavailable)
 from worker.middleware.rate_limit import RateLimitMiddleware
@@ -67,6 +69,14 @@ def send_summary_email(ai_output):
 async def index(request: Request):
     """Load homepage."""
     with open("templates/index.html", "r", encoding="utf-8") as f:
+        html = f.read()
+    return HTMLResponse(html)
+
+
+@app.get("/audit", response_class=HTMLResponse)
+async def audit_ui(request: Request):
+    """Load AuditAgent Enterprise Compliance portal."""
+    with open("templates/audit.html", "r", encoding="utf-8") as f:
         html = f.read()
     return HTMLResponse(html)
 
