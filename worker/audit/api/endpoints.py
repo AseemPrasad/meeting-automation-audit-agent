@@ -98,10 +98,18 @@ async def submit_audit_recording(
     os.makedirs(upload_dir, exist_ok=True)
 
     if storage_uri:
+        # Validate storage_uri extension
+        uri_ext = os.path.splitext(storage_uri.split("?")[0])[1].lower()
+        if uri_ext not in ALLOWED_AUDIO_EXTENSIONS:
+            db.close()
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported storage_uri extension '{uri_ext}'. Allowed formats: {sorted(list(ALLOWED_AUDIO_EXTENSIONS))}"
+            )
         # Direct cloud storage submission (S3/GCS) - bypass local disk saving
         final_storage_uri = storage_uri
         file_path = storage_uri
-        safe_basename = os.path.basename(storage_uri)
+        safe_basename = os.path.basename(storage_uri.split("?")[0])
     else:
         # Validate file extension
         file_ext = os.path.splitext(file.filename or "")[1].lower()
@@ -188,11 +196,17 @@ def get_audit_report(
             if job.tenant_id != x_org_id:
                 raise HTTPException(status_code=403, detail="Unauthorized access to this tenant's audit report.")
 
+        # Eagerly capture attributes before session closes to avoid DetachedInstanceError
+        job_id_val = str(job.id)
+        status_val = str(job.status)
+        error_val = job.error
+        result_val = job.result
+
         return {
-            "job_id": job.id,
-            "status": job.status,
-            "error": job.error,
-            "report": job.result
+            "job_id": job_id_val,
+            "status": status_val,
+            "error": error_val,
+            "report": result_val
         }
     finally:
         db.close()

@@ -19,11 +19,12 @@ def audit_transcript_compliance(
     extracted_evidence: List[EvidenceItem],
     template_name: str = "FINRA_REG_BI",
     job_id: Optional[str] = None,
-    audio_sha256: Optional[str] = None
+    audio_sha256: Optional[str] = None,
+    org_id: Optional[str] = None
 ) -> AuditReportResponse:
     """
     Evaluates verified claims against specified compliance template.
-    Generates a cryptographic tamper-evident audit report incorporating the source audio hash.
+    Generates a cryptographic tamper-evident audit report incorporating the source audio hash and org_id.
     """
     template = TEMPLATES.get(template_name, FINRA_REG_BI_TEMPLATE)
     
@@ -95,8 +96,9 @@ def audit_transcript_compliance(
         f"Identified {len(unsubstantiated)} unsubstantiated/hallucinated claim(s)."
     )
 
-    # 3. Create SHA-256 seal for tamper proofing (including raw audio binary hash)
+    # 3. Create SHA-256 seal for tamper proofing (including raw audio binary hash and org_id)
     payload_to_hash = json.dumps({
+        "org_id": org_id or "unassigned_tenant",
         "audio_sha256": audio_sha256 or "no_audio_hash_provided",
         "transcript": raw_transcript,
         "score": score,

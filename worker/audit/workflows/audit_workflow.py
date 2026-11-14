@@ -46,6 +46,7 @@ def process_audit_recording_task(
         db.commit()
 
     try:
+        is_remote = file_path.startswith("s3://") or file_path.startswith("gcs://")
         # Resolve storage URI (s3://, gcs://, local://) to accessible worker file
         local_file_path = storage_gateway.fetch_file_for_worker(file_path)
 
@@ -113,12 +114,19 @@ def process_audit_recording_task(
                             start = float(getattr(seg, "start", 0.0)) + offset_sec
                             end = float(getattr(seg, "end", 0.0)) + offset_sec
 
-                        # Attribute speaker based on true interval intersection
-                        attributed_speaker = "Advisor / Firm" if "fee" in seg_text.lower() or "risk" in seg_text.lower() else "Client"
+                        # Attribute speaker based on true interval intersection with max overlap
+                        best_overlap = 0.0
+                        best_speaker = None
                         for u in diarized_utterances:
-                            if min(end, u.end) - max(start, u.start) > 0:
-                                attributed_speaker = speaker_map.get(u.speaker, attributed_speaker)
-                                break
+                            overlap = min(end, u.end) - max(start, u.start)
+                            if overlap > best_overlap:
+                                best_overlap = overlap
+                                best_speaker = u.speaker
+
+                        if best_speaker and best_overlap > 0.1:
+                            attributed_speaker = speaker_map.get(best_speaker, best_speaker)
+                        else:
+                            attributed_speaker = "Advisor / Firm" if "fee" in seg_text.lower() or "risk" in seg_text.lower() else "Client"
 
                         # If segment contains commitment language, keep as candidate evidence
                         lower = seg_text.lower()
@@ -156,13 +164,14 @@ def process_audit_recording_task(
 
         raw_transcript = "\n".join(full_transcript_parts)
 
-        # Step 3: Run Audit Engine with Audio Binary Hash
+        # Step 3: Run Audit Engine with Audio Binary Hash and org_id
         audit_report = audit_transcript_compliance(
             raw_transcript=raw_transcript,
             extracted_evidence=sample_evidence,
             template_name=compliance_template,
             job_id=job_id,
-            audio_sha256=audio_sha256
+            audio_sha256=audio_sha256,
+            org_id=org_id
         )
 
         # Step 4: Deduct B2B tenant credit quota and dynamic token cost
@@ -200,5 +209,11 @@ def process_audit_recording_task(
         db.close()
         raise self.retry(exc=exc)
     finally:
+        # Clean up downloaded cloud file if fetched from remote S3/GCS
+        if is_remote and local_file_path and os.path.exists(local_file_path):
+            try:
+                os.remove(local_file_path)
+            except Exception:
+                pass
         db.close()
 

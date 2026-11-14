@@ -26,9 +26,14 @@ def verify_claims_against_transcript(
         
         # Check speaker role conflict if speaker attributions are provided
         if speaker_attributions and item.speaker:
-            attributed_role = speaker_attributions.get(item.speaker)
-            # If attributed to Advisor but quote is explicitly from client context, flag warning
-            if attributed_role and "advisor" in item.claim.lower() and "client" in attributed_role.lower():
+            spk_lower = item.speaker.lower()
+            is_client = any(
+                k.lower() in spk_lower and "client" in v.lower()
+                for k, v in speaker_attributions.items()
+            ) or "client" in spk_lower
+
+            # If attributed to Advisor but quote is actually from client, flag warning
+            if is_client and "advisor" in item.claim.lower():
                 item.verification_status = VerificationStatus.FLAGGED_UNSUBSTANTIATED
                 item.confidence_score = 0.3
                 unsubstantiated.append(item)
