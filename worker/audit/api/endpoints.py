@@ -9,8 +9,21 @@ from worker.core.database import get_db
 from worker.models.job import Job
 from worker.audit.workflows.audit_workflow import process_audit_recording_task
 from worker.audit.services.templates import TEMPLATES
+from worker.services.storage.storage_manager import storage_gateway
 
 router = APIRouter(prefix="/api/v2/audit", tags=["AuditAgent Compliance Engine"])
+
+
+@router.post("/upload-url")
+def request_presigned_upload_url(
+    filename: str,
+    content_type: str = "audio/mpeg"
+):
+    """
+    Decoupled storage: Generates a direct cloud presigned upload URL (S3 / GCS).
+    Bypasses the web server memory and disk completely.
+    """
+    return storage_gateway.generate_presigned_upload(filename, content_type)
 
 
 @router.get("/templates")
